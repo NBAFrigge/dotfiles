@@ -169,6 +169,20 @@ ensure_tpm() {
     run git clone --quiet --depth 1 https://github.com/tmux-plugins/tpm "$tpm" </dev/null || warn "TPM clone failed"
 }
 
+# Install the plugins listed in tmux.conf and reload a running tmux server, so the
+# config takes effect without pressing prefix+I or restarting tmux.
+ensure_tmux_plugins() {
+    if ! command -v tmux >/dev/null 2>&1; then warn "tmux not installed; skipping tmux plugins"; return 0; fi
+    installer="$HOME/.tmux/plugins/tpm/bin/install_plugins"
+    if [ ! -x "$installer" ] && [ "${DRY_RUN:-0}" != 1 ]; then warn "TPM missing; skipping tmux plugins"; return 0; fi
+    info "installing tmux plugins (TPM)"
+    run "$installer" </dev/null || warn "tmux plugin install failed; retry with prefix+I inside tmux"
+    if tmux ls >/dev/null 2>&1; then
+        info "reloading running tmux server"
+        run tmux source-file "$HOME/.tmux.conf" || warn "could not reload tmux config"
+    fi
+}
+
 ensure_shell() {
     zsh_path=$(command -v zsh 2>/dev/null || true)
     if [ -z "$zsh_path" ]; then warn "zsh not installed; skipping shell change"; return 0; fi
@@ -189,5 +203,6 @@ if [ "$UPDATE" = 1 ]; then info "--update: skipping package install"; else insta
 for r in $TOOL_REPOS; do sync_repo "$r"; done
 for r in $TOOL_REPOS; do link_repo "$r" || warn "linking $r failed"; done
 ensure_tpm
+ensure_tmux_plugins
 ensure_shell
 info "done. Backups (if any) are in $BACKUP_DIR"
