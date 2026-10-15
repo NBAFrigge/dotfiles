@@ -10,6 +10,7 @@ TOOL_REPOS="zsh-config tmux-config nvim-config git-config kitty-config"
 REPO_DIR="$HOME/.config-repos"
 BACKUP_DIR="$HOME/.dotfiles-backup/$(date +%Y%m%d-%H%M%S)"
 TAB=$(printf '\t')
+SUDO=""; [ "$(id -u)" = 0 ] || SUDO=sudo
 UPDATE=0
 for arg in "$@"; do
     case "$arg" in
@@ -47,7 +48,6 @@ install_macos() {
 }
 
 install_linux() {
-    SUDO=""; [ "$(id -u)" = 0 ] || SUDO=sudo
     if command -v pacman >/dev/null 2>&1; then
         PM=pacman; INSTALL="$SUDO pacman -S --needed --noconfirm"
         CORE="git zsh tmux neovim fzf ripgrep fd curl nodejs npm unzip"
@@ -187,15 +187,34 @@ ensure_shell() {
     zsh_path=$(command -v zsh 2>/dev/null || true)
     if [ -z "$zsh_path" ]; then warn "zsh not installed; skipping shell change"; return 0; fi
     if [ "$(basename "${SHELL:-}")" = zsh ]; then info "login shell is already zsh"; return 0; fi
-    if ! grep -qxF "$zsh_path" /etc/shells 2>/dev/null; then
-        warn "$zsh_path is not in /etc/shells; add it, then run: chsh -s $zsh_path"; return 0
-    fi
     user_home=$(eval "echo ~$(id -un)")
     if [ "$HOME" != "$user_home" ]; then
         warn "HOME ($HOME) is not the login home ($user_home); not changing the shell"; return 0
     fi
+    if ! grep -qxF "$zsh_path" /etc/shells 2>/dev/null; then
+        info "adding $zsh_path to /etc/shells"
+        run sh -c "echo '$zsh_path' | $SUDO tee -a /etc/shells >/dev/null" || { warn "could not edit /etc/shells"; return 0; }
+    fi
     info "changing login shell to zsh"
     run chsh -s "$zsh_path" || warn "chsh failed; run manually: chsh -s $zsh_path"
+}
+
+# Reload running kitty windows (kitty re-reads kitty.conf on SIGUSR1).
+ensure_kitty_reload() {
+    if command -v kitty >/dev/null 2>&1 && pgrep -x kitty >/dev/null 2>&1; then
+        info "reloading running kitty"
+        run pkill -USR1 -x kitty || warn "could not signal kitty"
+    fi
+}
+
+# Hand the terminal to zsh so the new config is active straight away.
+# Only when run from a real terminal; set DOTFILES_NO_EXEC=1 to skip.
+start_zsh() {
+    zsh_path=$(command -v zsh 2>/dev/null || true)
+    if [ -z "$zsh_path" ] || [ "${DRY_RUN:-0}" = 1 ] || [ "${DOTFILES_NO_EXEC:-0}" = 1 ]; then return 0; fi
+    if ! (exec </dev/tty) 2>/dev/null; then info "no terminal attached; open a new shell to use zsh"; return 0; fi
+    info "starting zsh"
+    exec "$zsh_path" -l </dev/tty >/dev/tty 2>&1 || warn "could not start zsh; open a new shell instead"
 }
 
 info "dotfiles bootstrap (OS: $(uname -s), home: $HOME)"
@@ -204,5 +223,7 @@ for r in $TOOL_REPOS; do sync_repo "$r"; done
 for r in $TOOL_REPOS; do link_repo "$r" || warn "linking $r failed"; done
 ensure_tpm
 ensure_tmux_plugins
+ensure_kitty_reload
 ensure_shell
 info "done. Backups (if any) are in $BACKUP_DIR"
+start_zsh
