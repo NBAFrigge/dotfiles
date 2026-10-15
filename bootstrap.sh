@@ -47,16 +47,18 @@ install_macos() {
 }
 
 install_linux() {
+    SUDO=""; [ "$(id -u)" = 0 ] || SUDO=sudo
     if command -v pacman >/dev/null 2>&1; then
-        PM=pacman; INSTALL="sudo pacman -S --needed --noconfirm"
-        CORE="git zsh tmux neovim fzf ripgrep fd curl"
+        PM=pacman; INSTALL="$SUDO pacman -S --needed --noconfirm"
+        CORE="git zsh tmux neovim fzf ripgrep fd curl nodejs npm unzip"
     elif command -v apt-get >/dev/null 2>&1; then
-        PM=apt-get; INSTALL="sudo apt-get install -y"
-        CORE="git zsh tmux neovim fzf ripgrep fd-find curl"
-        run sudo apt-get update || warn "apt-get update failed"
+        PM=apt-get; INSTALL="$SUDO apt-get install -y"
+        # neovim is installed from upstream below: Debian 12 ships 0.7, too old for LazyVim
+        CORE="git zsh tmux fzf ripgrep fd-find curl nodejs npm unzip"
+        run $SUDO apt-get update || warn "apt-get update failed"
     elif command -v dnf >/dev/null 2>&1; then
-        PM=dnf; INSTALL="sudo dnf install -y"
-        CORE="git zsh tmux neovim fzf ripgrep fd-find curl"
+        PM=dnf; INSTALL="$SUDO dnf install -y"
+        CORE="git zsh tmux neovim fzf ripgrep fd-find curl nodejs npm unzip"
     else
         die "no supported package manager found (pacman, apt-get, dnf)"
     fi
@@ -66,7 +68,33 @@ install_linux() {
     info "installing extras ($PM): kitty"
     # shellcheck disable=SC2086
     run $INSTALL kitty || warn "kitty not available via $PM; install it manually"
-    if [ "$PM" = apt-get ]; then warn "Debian/Ubuntu name fd 'fdfind'; the fd alias in .zshrc will not apply"; fi
+    if [ "$PM" = apt-get ] && ! command -v fd >/dev/null 2>&1 && command -v fdfind >/dev/null 2>&1; then
+        info "linking fdfind -> /usr/local/bin/fd"
+        run $SUDO ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+    fi
+    ensure_nvim
+}
+
+# LazyVim needs Neovim >= 0.9. Use the distro package if it is new enough,
+# otherwise install the upstream build into /opt/nvim (on PATH via /usr/local/bin).
+ensure_nvim() {
+    case "$(uname -m)" in
+        x86_64) nv_arch=x86_64 ;;
+        aarch64|arm64) nv_arch=arm64 ;;
+        *) warn "no upstream Neovim build for $(uname -m); install Neovim >= 0.9 manually"; return 0 ;;
+    esac
+    have=$(nvim --version 2>/dev/null | sed -n 's/^NVIM v0\.\([0-9]*\).*/\1/p' | head -1)
+    if [ -n "$have" ] && [ "$have" -ge 9 ]; then info "neovim 0.$have ok"; return 0; fi
+    info "installing Neovim from upstream (found: 0.${have:-none}, need >= 0.9)"
+    tmp=$(mktemp -d)
+    if ! run curl -fsSL -o "$tmp/nvim.tar.gz" "https://github.com/neovim/neovim/releases/download/stable/nvim-linux-$nv_arch.tar.gz"; then
+        warn "Neovim download failed; install Neovim >= 0.9 manually"; rm -rf "$tmp"; return 0
+    fi
+    run $SUDO rm -rf /opt/nvim
+    run $SUDO mkdir -p /opt/nvim
+    run $SUDO tar -xzf "$tmp/nvim.tar.gz" -C /opt/nvim --strip-components=1
+    run $SUDO ln -sf /opt/nvim/bin/nvim /usr/local/bin/nvim
+    rm -rf "$tmp"
 }
 
 install_packages() {
